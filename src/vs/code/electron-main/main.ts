@@ -125,7 +125,7 @@ class CodeMain {
 				// If this throws an error it means we are not the first
 				// instance of VS Code running and so we would quit.
 				// Skip IPC server creation if --new-instance flag is set (multi-instance mode)
-				let mainProcessNodeIpcServer: NodeIPCServer | undefined;
+				let mainProcessNodeIpcServer: NodeIPCServer;
 				if ((environmentMainService.args as any)['new-instance']) {
 					logService.info('Multi-instance mode: skipping IPC server claim');
 					// Create a dummy server that does nothing
