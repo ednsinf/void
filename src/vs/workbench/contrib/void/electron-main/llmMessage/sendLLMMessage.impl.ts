@@ -314,6 +314,10 @@ const XML_TOOL_NAMES = ['run_command', 'read_file', 'ls_dir', 'edit_file', 'rewr
 	'search_pathnames_only', 'get_dir_tree', 'run_persistent_command', 'open_persistent_terminal',
 	'kill_persistent_terminal', 'read_lint_errors']
 const stripXmlToolCalls = (text: string): string => {
+	// Strip generic <tool_call> tags (models like MiMo/DeepSeek output these)
+	text = text.replace(/<tool_call>[\s\S]*?<\/tool_call>/g, '')
+	text = text.replace(/<\/?tool_call>/g, '')
+	// Strip specific tool tags
 	for (const name of XML_TOOL_NAMES) {
 		text = text.replace(new RegExp(`<${name}>[\\s\\S]*?</${name}>`, 'g'), '')
 	}
