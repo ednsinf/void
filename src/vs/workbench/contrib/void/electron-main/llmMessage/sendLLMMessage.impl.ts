@@ -255,6 +255,59 @@ const rawToolCallObjOfParamsStr = (name: string, toolParamsStr: string, id: stri
 	return { id, name, rawParams, doneParams: Object.keys(rawParams), isDone: true }
 }
 
+// --- Tool name mapping for OpenAI-compatible providers (Verboo, etc.) ---
+// Models like DeepSeek/MiMo/GLM/Qwen return generic tool names that don't match
+// Void's builtin tool names. This mapping translates them.
+const TOOL_NAME_MAP: Record<string, string> = {
+	'bash': 'run_command',
+	'shell': 'run_command',
+	'execute': 'run_command',
+	'terminal': 'run_command',
+	'run_terminal_command': 'run_command',
+	'computer': 'run_command',
+	'read': 'read_file',
+	'read_file': 'read_file',
+	'write': 'rewrite_file',
+	'write_file': 'rewrite_file',
+	'create_file': 'create_file_or_folder',
+	'edit': 'edit_file',
+	'edit_file': 'edit_file',
+	'list_files': 'ls_dir',
+	'ls': 'ls_dir',
+	'ls_dir': 'ls_dir',
+	'search': 'search_for_files',
+	'search_files': 'search_for_files',
+	'search_in_file': 'search_in_file',
+	'grep': 'search_for_files',
+}
+
+// Map generic param names to Void's expected param names
+const PARAM_NAME_MAP: Record<string, Record<string, string>> = {
+	'run_command': { 'command': 'command', 'cmd': 'command', 'cwd': 'cwd' },
+	'read_file': { 'path': 'uri', 'file_path': 'uri', 'filename': 'uri', 'file': 'uri' },
+	'rewrite_file': { 'path': 'uri', 'file_path': 'uri', 'filename': 'uri', 'file': 'uri', 'content': 'new_content', 'new_content': 'new_content' },
+	'edit_file': { 'path': 'uri', 'file_path': 'uri', 'filename': 'uri', 'file': 'uri', 'content': 'search_replace_blocks', 'search_replace_blocks': 'search_replace_blocks', 'old_str': 'search_replace_blocks', 'new_str': 'search_replace_blocks' },
+	'create_file_or_folder': { 'path': 'uri', 'file_path': 'uri' },
+	'ls_dir': { 'path': 'uri', 'dir_path': 'uri', 'directory': 'uri' },
+	'search_for_files': { 'query': 'query', 'pattern': 'query', 'search': 'query' },
+	'search_in_file': { 'path': 'uri', 'file_path': 'uri', 'query': 'query', 'pattern': 'query' },
+}
+
+const mapToolName = (name: string): string => {
+	return TOOL_NAME_MAP[name] ?? name
+}
+
+const mapToolParams = (toolName: string, rawParams: RawToolParamsObj): RawToolParamsObj => {
+	const paramMap = PARAM_NAME_MAP[toolName]
+	if (!paramMap) return rawParams
+	const mapped: RawToolParamsObj = {}
+	for (const [key, value] of Object.entries(rawParams)) {
+		const mappedKey = paramMap[key] ?? key
+		mapped[mappedKey] = value
+	}
+	return mapped
+}
+
 
 const rawToolCallObjOfAnthropicParams = (toolBlock: Anthropic.Messages.ToolUseBlock): RawToolCallObj | null => {
 	const { id, name, input } = toolBlock
@@ -289,9 +342,10 @@ const _sendOpenAICompatibleChat = async ({ messages, onText, onFinalMessage, onE
 		...additionalOpenAIPayload
 	}
 
-	// tools
+	// tools - always send as native OpenAI function calling when available
+	// (even for unknown models, the API may support it)
 	const potentialTools = openAITools(chatMode, mcpTools)
-	const nativeToolsObj = potentialTools && specialToolFormat === 'openai-style' ?
+	const nativeToolsObj = potentialTools ?
 		{ tools: potentialTools } as const
 		: {}
 
@@ -319,8 +373,8 @@ const _sendOpenAICompatibleChat = async ({ messages, onText, onFinalMessage, onE
 		onFinalMessage = newOnFinalMessage
 	}
 
-	// manually parse out tool results if XML
-	if (!specialToolFormat) {
+	// manually parse out tool results if XML (only when NOT sending native tools)
+	if (!specialToolFormat && !potentialTools) {
 		const { newOnText, newOnFinalMessage } = extractXMLToolsWrapper(onText, onFinalMessage, chatMode, mcpTools)
 		onText = newOnText
 		onFinalMessage = newOnFinalMessage
@@ -362,11 +416,12 @@ const _sendOpenAICompatibleChat = async ({ messages, onText, onFinalMessage, onE
 					fullReasoningSoFar += newReasoning
 				}
 
-				// call onText
+				// call onText (map generic tool names to Void builtin names)
+				const mappedName = mapToolName(toolName)
 				onText({
 					fullText: fullTextSoFar,
 					fullReasoning: fullReasoningSoFar,
-					toolCall: !toolName ? undefined : { name: toolName, rawParams: {}, isDone: false, doneParams: [], id: toolId },
+					toolCall: !toolName ? undefined : { name: mappedName, rawParams: {}, isDone: false, doneParams: [], id: toolId },
 				})
 
 			}
@@ -375,7 +430,14 @@ const _sendOpenAICompatibleChat = async ({ messages, onText, onFinalMessage, onE
 				onError({ message: 'Void: Response from model was empty.', fullError: null })
 			}
 			else {
-				const toolCall = rawToolCallObjOfParamsStr(toolName, toolParamsStr, toolId)
+				// Map generic tool names (bash, read, write) to Void builtin names
+				const mappedToolName = mapToolName(toolName)
+				const toolCall = rawToolCallObjOfParamsStr(mappedToolName, toolParamsStr, toolId)
+				if (toolCall) {
+					// Map generic param names to Void's expected param names
+					toolCall.rawParams = mapToolParams(mappedToolName, toolCall.rawParams)
+					toolCall.doneParams = Object.keys(toolCall.rawParams)
+				}
 				const toolCallObj = toolCall ? { toolCall } : {}
 				onFinalMessage({ fullText: fullTextSoFar, fullReasoning: fullReasoningSoFar, anthropicReasoning: null, ...toolCallObj });
 			}
@@ -807,11 +869,12 @@ const sendGeminiChat = async ({
 
 				// (do not handle reasoning yet)
 
-				// call onText
+				// call onText (map generic tool names to Void builtin names)
+				const mappedName = mapToolName(toolName)
 				onText({
 					fullText: fullTextSoFar,
 					fullReasoning: fullReasoningSoFar,
-					toolCall: !toolName ? undefined : { name: toolName, rawParams: {}, isDone: false, doneParams: [], id: toolId },
+					toolCall: !toolName ? undefined : { name: mappedName, rawParams: {}, isDone: false, doneParams: [], id: toolId },
 				})
 			}
 
