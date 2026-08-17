@@ -124,7 +124,15 @@ class CodeMain {
 				// Create the main IPC server by trying to be the server
 				// If this throws an error it means we are not the first
 				// instance of VS Code running and so we would quit.
-				const mainProcessNodeIpcServer = await this.claimInstance(logService, environmentMainService, lifecycleMainService, instantiationService, productService, true);
+				// Skip IPC server creation if --new-instance flag is set (multi-instance mode)
+				let mainProcessNodeIpcServer: NodeIPCServer | undefined;
+				if ((environmentMainService.args as any)['new-instance']) {
+					logService.info('Multi-instance mode: skipping IPC server claim');
+					// Create a dummy server that does nothing
+					mainProcessNodeIpcServer = { dispose: () => {} } as any;
+				} else {
+					mainProcessNodeIpcServer = await this.claimInstance(logService, environmentMainService, lifecycleMainService, instantiationService, productService, true);
+				}
 
 				// Write a lockfile to indicate an instance is running
 				// (https://github.com/microsoft/vscode/issues/127861#issuecomment-877417451)

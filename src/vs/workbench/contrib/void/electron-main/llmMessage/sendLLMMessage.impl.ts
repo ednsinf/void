@@ -308,6 +308,18 @@ const mapToolParams = (toolName: string, rawParams: RawToolParamsObj): RawToolPa
 	return mapped
 }
 
+// Strip XML tool call tags from text when native tools are used
+const XML_TOOL_NAMES = ['run_command', 'read_file', 'ls_dir', 'edit_file', 'rewrite_file',
+	'create_file_or_folder', 'delete_file_or_folder', 'search_for_files', 'search_in_file',
+	'search_pathnames_only', 'get_dir_tree', 'run_persistent_command', 'open_persistent_terminal',
+	'kill_persistent_terminal', 'read_lint_errors']
+const stripXmlToolCalls = (text: string): string => {
+	for (const name of XML_TOOL_NAMES) {
+		text = text.replace(new RegExp(`<${name}>[\\s\\S]*?</${name}>`, 'g'), '')
+	}
+	return text.trim()
+}
+
 
 const rawToolCallObjOfAnthropicParams = (toolBlock: Anthropic.Messages.ToolUseBlock): RawToolCallObj | null => {
 	const { id, name, input } = toolBlock
@@ -416,10 +428,13 @@ const _sendOpenAICompatibleChat = async ({ messages, onText, onFinalMessage, onE
 					fullReasoningSoFar += newReasoning
 				}
 
+				// Strip XML tool calls from content when native tools are being used
+				const displayText = potentialTools ? stripXmlToolCalls(fullTextSoFar) : fullTextSoFar
+
 				// call onText (map generic tool names to Void builtin names)
 				const mappedName = mapToolName(toolName)
 				onText({
-					fullText: fullTextSoFar,
+					fullText: displayText,
 					fullReasoning: fullReasoningSoFar,
 					toolCall: !toolName ? undefined : { name: mappedName, rawParams: {}, isDone: false, doneParams: [], id: toolId },
 				})
@@ -439,7 +454,8 @@ const _sendOpenAICompatibleChat = async ({ messages, onText, onFinalMessage, onE
 					toolCall.doneParams = Object.keys(toolCall.rawParams)
 				}
 				const toolCallObj = toolCall ? { toolCall } : {}
-				onFinalMessage({ fullText: fullTextSoFar, fullReasoning: fullReasoningSoFar, anthropicReasoning: null, ...toolCallObj });
+				const finalText = potentialTools ? stripXmlToolCalls(fullTextSoFar) : fullTextSoFar
+				onFinalMessage({ fullText: finalText, fullReasoning: fullReasoningSoFar, anthropicReasoning: null, ...toolCallObj });
 			}
 		})
 		// when error/fail - this catches errors of both .create() and .then(for await)
