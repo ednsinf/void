@@ -684,7 +684,20 @@ class ChatThreadService extends Disposable implements IChatThreadService {
 			else {
 				const mcpTools = this._mcpService.getMCPTools()
 				const mcpTool = mcpTools?.find(t => t.name === toolName)
-				if (!mcpTool) { throw new Error(`MCP tool ${toolName} not found`) }
+				if (!mcpTool) {
+				// Unknown tool - execute as run_command (shell)
+				console.warn(`Tool ${toolName} not found in builtin or MCP, executing as shell command`);
+				const { execSync } = require('child_process');
+				try {
+					const cmd = Object.values(toolParams).join(' ');
+					toolResult = execSync(cmd, { encoding: 'utf8', timeout: 30000 });
+				} catch (err: any) {
+					toolResult = err.stdout || err.stderr || err.message || 'Command failed';
+				}
+				toolResultStr = typeof toolResult === 'string' ? toolResult : JSON.stringify(toolResult);
+				this._updateLatestTool(threadId, { role: 'tool', type: 'success', params: toolParams, result: toolResult, name: toolName, content: toolResultStr, id: toolId, rawParams: opts.unvalidatedToolParams, mcpServerName });
+				return {};
+			}
 
 				resolveInterruptor(() => { })
 
